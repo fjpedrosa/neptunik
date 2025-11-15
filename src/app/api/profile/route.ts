@@ -1,18 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
-import { createClient } from '@/lib/supabase/server';
 
 /**
- * User Profile API Route
+ * User Profile API Route (Proxy to Backend)
  * GET /api/profile - Get current user's profile
  * PUT /api/profile - Update current user's profile
  *
- * Requires authentication via Supabase session
+ * This endpoint acts as a proxy to the backend API
+ * Backend URLs:
+ * - Production: https://api.neptunik.com
+ * - Local: http://localhost:3030
  */
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ||
+  (process.env.NODE_ENV === 'production'
+    ? 'https://api.neptunik.com'
+    : 'http://localhost:3030');
+
+/**
+ * Helper to get auth token from request
+ */
+function getAuthToken(request: NextRequest): string | null {
+  const authHeader = request.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    return authHeader.substring(7);
+  }
+
+  // Also check for token in cookies
+  const cookieToken = request.cookies.get('auth_token')?.value;
+  return cookieToken || null;
+}
 
 /**
  * GET /api/profile
- * Fetch the current authenticated user's profile
+ * Fetch the current authenticated user's profile from backend
  */
 export async function GET(request: NextRequest) {
   return await Sentry.startSpan(
@@ -26,13 +47,10 @@ export async function GET(request: NextRequest) {
     },
     async (span) => {
       try {
-        // Create Supabase client
-        const supabase = await createClient();
+        // Get auth token
+        const token = getAuthToken(request);
 
-        // Get authenticated user
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
+        if (!token) {
           span.setStatus({ code: 2, message: 'unauthorized' });
           return NextResponse.json(
             {
@@ -44,73 +62,43 @@ export async function GET(request: NextRequest) {
           );
         }
 
-        // Fetch user profile
-        const { data: profile, error: profileError } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
+        // Call backend API
+        const backendResponse = await fetch(`${BACKEND_URL}/api/v1/users/profile`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
 
-        if (profileError) {
-          // If profile doesn't exist, return minimal user info from auth
-          if (profileError.code === 'PGRST116') {
-            return NextResponse.json(
-              {
-                success: true,
-                data: {
-                  id: user.id,
-                  email: user.email,
-                  full_name: user.user_metadata?.full_name || '',
-                  phone_number: user.phone || null,
-                  company_name: null,
-                  timezone: 'UTC',
-                  language: 'es',
-                  avatar_url: user.user_metadata?.avatar_url || null,
-                  email_verified: user.email_confirmed_at ? true : false,
-                  two_factor_enabled: false,
-                  onboarding_completed: false,
-                  marketing_emails: false,
-                  created_at: user.created_at,
-                  updated_at: user.updated_at || user.created_at,
-                },
-              },
-              { status: 200 }
-            );
-          }
+        // Forward backend response status
+        if (!backendResponse.ok) {
+          const errorData = await backendResponse.json().catch(() => ({
+            error: 'Backend Error',
+            message: `Backend returned ${backendResponse.status}`,
+          }));
 
-          throw profileError;
+          span.setStatus({ code: 2, message: 'backend_error' });
+
+          return NextResponse.json(
+            {
+              success: false,
+              ...errorData,
+            },
+            { status: backendResponse.status }
+          );
         }
 
+        // Forward successful response
+        const data = await backendResponse.json();
         span.setStatus({ code: 1, message: 'ok' });
 
-        return NextResponse.json(
-          {
-            success: true,
-            data: {
-              id: profile.id,
-              user_id: profile.user_id,
-              email: user.email,
-              full_name: profile.full_name,
-              phone_number: profile.phone_number,
-              company_name: profile.company_name,
-              timezone: profile.timezone || 'UTC',
-              language: profile.language || 'es',
-              avatar_url: profile.avatar_url,
-              email_verified: user.email_confirmed_at ? true : false,
-              two_factor_enabled: profile.two_factor_enabled || false,
-              onboarding_completed: profile.onboarding_completed || false,
-              marketing_emails: profile.marketing_emails || false,
-              created_at: profile.created_at,
-              updated_at: profile.updated_at,
-            },
+        return NextResponse.json(data, {
+          status: 200,
+          headers: {
+            'Cache-Control': 'private, max-age=600', // Cache for 10 minutes
           },
-          {
-            status: 200,
-            headers: {
-              'Cache-Control': 'private, max-age=600', // Cache for 10 minutes
-            },
-          }
-        );
+        });
       } catch (error) {
         // Capture exception to Sentry
         Sentry.captureException(error, {
@@ -139,7 +127,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * PUT /api/profile
- * Update the current authenticated user's profile
+ * Update the current authenticated user's profile (proxy to backend)
  */
 export async function PUT(request: NextRequest) {
   return await Sentry.startSpan(
@@ -153,13 +141,10 @@ export async function PUT(request: NextRequest) {
     },
     async (span) => {
       try {
-        // Create Supabase client
-        const supabase = await createClient();
+        // Get auth token
+        const token = getAuthToken(request);
 
-        // Get authenticated user
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
+        if (!token) {
           span.setStatus({ code: 2, message: 'unauthorized' });
           return NextResponse.json(
             {
@@ -174,94 +159,45 @@ export async function PUT(request: NextRequest) {
         // Parse request body
         const body = await request.json();
 
-        // Validate and sanitize input
-        const allowedFields = [
-          'full_name',
-          'phone_number',
-          'company_name',
-          'timezone',
-          'language',
-          'marketing_emails',
-        ];
+        // Call backend API
+        const backendResponse = await fetch(`${BACKEND_URL}/api/v1/users/profile`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
 
-        const updateData: Record<string, any> = {
-          updated_at: new Date().toISOString(),
-        };
+        // Forward backend response status
+        if (!backendResponse.ok) {
+          const errorData = await backendResponse.json().catch(() => ({
+            error: 'Backend Error',
+            message: `Backend returned ${backendResponse.status}`,
+          }));
 
-        // Only include allowed fields
-        for (const field of allowedFields) {
-          if (field in body) {
-            updateData[field] = body[field];
-          }
-        }
+          span.setStatus({ code: 2, message: 'backend_error' });
 
-        // Check if there's anything to update
-        if (Object.keys(updateData).length === 1) {
           return NextResponse.json(
             {
               success: false,
-              error: 'Bad Request',
-              message: 'No valid fields to update',
+              ...errorData,
             },
-            { status: 400 }
+            { status: backendResponse.status }
           );
         }
 
-        // Update or insert profile
-        const { data: profile, error: updateError } = await supabase
-          .from('user_profiles')
-          .upsert(
-            {
-              user_id: user.id,
-              ...updateData,
-            },
-            {
-              onConflict: 'user_id',
-            }
-          )
-          .select()
-          .single();
-
-        if (updateError) {
-          throw updateError;
-        }
-
+        // Forward successful response
+        const data = await backendResponse.json();
         span.setStatus({ code: 1, message: 'ok' });
 
         Sentry.addBreadcrumb({
           category: 'api',
           message: 'Profile updated successfully',
           level: 'info',
-          data: {
-            userId: user.id,
-            updatedFields: Object.keys(updateData).filter(k => k !== 'updated_at'),
-          },
         });
 
-        return NextResponse.json(
-          {
-            success: true,
-            data: {
-              id: profile.id,
-              user_id: profile.user_id,
-              email: user.email,
-              full_name: profile.full_name,
-              phone_number: profile.phone_number,
-              company_name: profile.company_name,
-              timezone: profile.timezone || 'UTC',
-              language: profile.language || 'es',
-              avatar_url: profile.avatar_url,
-              email_verified: user.email_confirmed_at ? true : false,
-              two_factor_enabled: profile.two_factor_enabled || false,
-              onboarding_completed: profile.onboarding_completed || false,
-              marketing_emails: profile.marketing_emails || false,
-              created_at: profile.created_at,
-              updated_at: profile.updated_at,
-            },
-            message: 'Profile updated successfully',
-          },
-          { status: 200 }
-        );
+        return NextResponse.json(data, { status: 200 });
       } catch (error) {
         // Capture exception to Sentry
         Sentry.captureException(error, {
@@ -291,7 +227,7 @@ export async function PUT(request: NextRequest) {
 /**
  * PATCH /api/profile
  * Partial update of the current authenticated user's profile
- * (Alias for PUT endpoint)
+ * (Alias for PUT endpoint, proxies to backend)
  */
 export async function PATCH(request: NextRequest) {
   return PUT(request);

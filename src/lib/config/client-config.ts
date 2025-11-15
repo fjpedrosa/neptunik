@@ -53,8 +53,13 @@ export const clientConfig = {
     isDevelopment: process.env.NODE_ENV === 'development',
     // Application URL
     url: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
-    // API URL (can be different in production)
+    // API URL (Next.js API routes - acts as gateway/proxy)
     apiUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api',
+    // Backend API URL (separate backend service with Prisma)
+    backendUrl: process.env.NEXT_PUBLIC_BACKEND_URL ||
+      (process.env.NODE_ENV === 'production'
+        ? 'https://api.neptunik.com'
+        : 'http://localhost:3030'),
   },
 
   /**
