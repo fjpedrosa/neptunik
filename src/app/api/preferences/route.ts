@@ -1,20 +1,17 @@
 /**
- * Preferences API Route
+ * Preferences API Route (BFF - Backend for Frontend)
+ * Acts as a proxy to the backend API with Prisma
  * Handles GET and PUT requests for user preferences
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import {
-  GetPreferencesUseCase,
-  UpdatePreferencesUseCase,
-  SupabasePreferencesRepository,
-  LocalStoragePreferencesRepository,
-} from '@/modules/settings'
+
+const BACKEND_API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:4000/api'
 
 /**
  * GET /api/preferences
- * Retrieve user preferences
+ * Retrieve user preferences from backend API
  */
 export async function GET(request: NextRequest) {
   try {
@@ -39,17 +36,36 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Create repository and use case
-    const repository = new SupabasePreferencesRepository(supabase)
-    const useCase = new GetPreferencesUseCase(repository)
+    // Call backend API with Prisma
+    const backendResponse = await fetch(`${BACKEND_API_URL}/users/${user.id}/preferences`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': request.headers.get('Authorization') || '',
+      },
+      signal: AbortSignal.timeout(30000),
+    })
 
-    // Execute use case
-    const result = await useCase.execute({ userId: user.id })
+    if (!backendResponse.ok) {
+      const errorData = await backendResponse.json().catch(() => ({}))
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            message: errorData.message || 'Failed to fetch preferences from backend',
+            code: errorData.code || 'BACKEND_ERROR',
+          },
+        },
+        { status: backendResponse.status }
+      )
+    }
+
+    const data = await backendResponse.json()
 
     return NextResponse.json({
       success: true,
-      data: result,
-      preferences: result.preferences,
+      data: data.data || data,
+      preferences: data.data?.preferences || data.preferences,
     })
   } catch (error) {
     console.error('Error in GET /api/preferences:', error)
@@ -69,7 +85,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * PUT /api/preferences
- * Update user preferences
+ * Update user preferences via backend API
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -112,20 +128,37 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    // Create repository and use case
-    const repository = new SupabasePreferencesRepository(supabase)
-    const useCase = new UpdatePreferencesUseCase(repository)
-
-    // Execute use case
-    const result = await useCase.execute({
-      userId: user.id,
-      preferences,
+    // Call backend API with Prisma
+    const backendResponse = await fetch(`${BACKEND_API_URL}/users/${user.id}/preferences`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': request.headers.get('Authorization') || '',
+      },
+      body: JSON.stringify({ preferences }),
+      signal: AbortSignal.timeout(30000),
     })
+
+    if (!backendResponse.ok) {
+      const errorData = await backendResponse.json().catch(() => ({}))
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            message: errorData.message || 'Failed to update preferences on backend',
+            code: errorData.code || 'BACKEND_ERROR',
+          },
+        },
+        { status: backendResponse.status }
+      )
+    }
+
+    const data = await backendResponse.json()
 
     return NextResponse.json({
       success: true,
-      data: result,
-      preferences: result.preferences,
+      data: data.data || data,
+      preferences: data.data?.preferences || data.preferences,
     })
   } catch (error) {
     console.error('Error in PUT /api/preferences:', error)

@@ -2,7 +2,20 @@
 
 ## Overview
 
-This document describes the implementation of the Settings and Preferences feature for Neptunik.
+This document describes the implementation of the Settings and Preferences feature for Neptunik using Clean Architecture with a backend API (Prisma).
+
+## Architecture
+
+### High-Level Flow
+
+```
+Frontend (Next.js) → Next.js API Routes (BFF) → Backend API (Prisma) → Database
+```
+
+1. **Frontend**: React components and hooks
+2. **BFF (Backend for Frontend)**: Next.js API routes act as a proxy
+3. **Backend API**: Separate service with Prisma ORM handling database operations
+4. **Database**: PostgreSQL (or your preferred database)
 
 ## What Was Implemented
 
@@ -20,7 +33,7 @@ Following Clean Architecture principles:
   - `UpdatePreferencesUseCase` - Update preferences with validation
 
 - **Infrastructure Layer**
-  - `SupabasePreferencesRepository` - PostgreSQL persistence
+  - `HttpPreferencesRepository` - HTTP client to call backend API
   - `LocalStoragePreferencesRepository` - Browser storage fallback
 
 - **UI Layer**
@@ -37,220 +50,284 @@ Following Clean Architecture principles:
 - Responsive design with sidebar navigation
 - Full Tailwind CSS styling (no custom CSS files)
 
-### 3. API Endpoints
+### 3. API Endpoints (BFF Layer)
+
+Next.js API routes that proxy requests to the backend:
 
 - **GET `/api/preferences`** - Retrieve user preferences
+  - Authenticates user
+  - Calls backend `GET /users/:userId/preferences`
+  - Returns preferences to frontend
+
 - **PUT `/api/preferences`** - Update user preferences
+  - Validates authentication
+  - Proxies request to backend `PUT /users/:userId/preferences`
+  - Returns updated preferences
+
 - **GET `/api/realtime/events`** - Server-Sent Events for real-time updates
 
-### 4. Database Migration
+## Backend API Requirements
 
-- Supabase migration: `20250115000000_create_user_preferences.sql`
-- Table: `user_preferences`
-- Row Level Security (RLS) policies enabled
-- Auto-updating timestamps
+The backend API (separate service) must implement these endpoints:
+
+### GET /users/:userId/preferences
+
+Retrieve user preferences from database using Prisma.
+
+**Request:**
+```http
+GET /users/{userId}/preferences HTTP/1.1
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "preferences": {
+      "theme": "dark",
+      "language": "es",
+      "timezone": "UTC",
+      "dateFormat": "DD/MM/YYYY",
+      "notifications": {
+        "email": true,
+        "push": true,
+        "marketing": false,
+        "security": true
+      }
+    }
+  }
+}
+```
+
+### PUT /users/:userId/preferences
+
+Update user preferences in database using Prisma.
+
+**Request:**
+```http
+PUT /users/{userId}/preferences HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer {token}
+
+{
+  "preferences": {
+    "theme": "dark",
+    "language": "es"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "preferences": {
+      "theme": "dark",
+      "language": "es",
+      "timezone": "UTC",
+      "dateFormat": "DD/MM/YYYY",
+      "notifications": {
+        "email": true,
+        "push": true,
+        "marketing": false,
+        "security": true
+      }
+    }
+  }
+}
+```
+
+### DELETE /users/:userId/preferences
+
+Reset preferences to defaults.
+
+**Request:**
+```http
+DELETE /users/{userId}/preferences HTTP/1.1
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "preferences": { /* default preferences */ }
+  }
+}
+```
 
 ## Setup Instructions
 
-### 1. Apply Database Migration
+### 1. Configure Environment Variables
+
+Add to `.env.local`:
 
 ```bash
-# Run the Supabase migration
-npx supabase migration up
+# Backend API URL (Prisma service)
+BACKEND_API_URL=http://localhost:4000/api
+# Or for production
+# BACKEND_API_URL=https://api.neptunik.com/api
 
-# Or if using Supabase CLI locally
-supabase db push
+# Optional: For client-side
+NEXT_PUBLIC_BACKEND_API_URL=http://localhost:4000/api
 ```
 
-### 2. Verify Database Schema
+### 2. Backend Database Schema (Prisma)
 
-The `user_preferences` table should have:
-- `id` (UUID, primary key)
-- `user_id` (UUID, foreign key to auth.users)
-- `theme` (text: 'light', 'dark', 'system')
-- `language` (text: 'en', 'es', 'fr', 'pt', 'de')
-- `timezone` (text)
-- `date_format` (text)
-- `notifications_email` (boolean)
-- `notifications_push` (boolean)
-- `notifications_marketing` (boolean)
-- `notifications_security` (boolean)
-- `created_at` (timestamptz)
-- `updated_at` (timestamptz)
+The backend API should have this Prisma schema:
 
-### 3. Test the Implementation
+```prisma
+model UserPreferences {
+  id        String   @id @default(cuid())
+  userId    String   @unique @map("user_id")
 
-#### Manual Testing
+  // Appearance
+  theme     String   @default("system") // 'light', 'dark', 'system'
 
-1. **Navigate to Settings Page**
-   ```
-   https://www.neptunik.com/settings
-   ```
+  // Localization
+  language  String   @default("es") // 'en', 'es', 'fr', 'pt', 'de'
+  timezone  String   @default("UTC")
+  dateFormat String  @default("DD/MM/YYYY") @map("date_format")
 
-2. **Test Preferences Tab**
-   - Change theme (Light/Dark/System)
-   - Change language
-   - Toggle notification preferences
-   - Click "Guardar cambios"
-   - Verify success message
+  // Notifications
+  notificationsEmail    Boolean @default(true) @map("notifications_email")
+  notificationsPush     Boolean @default(true) @map("notifications_push")
+  notificationsMarketing Boolean @default(false) @map("notifications_marketing")
+  notificationsSecurity Boolean @default(true) @map("notifications_security")
 
-3. **Test API Endpoints**
-   ```bash
-   # Get preferences
-   curl -X GET https://www.neptunik.com/api/preferences \
-     -H "Authorization: Bearer YOUR_TOKEN"
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-   # Update preferences
-   curl -X PUT https://www.neptunik.com/api/preferences \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_TOKEN" \
-     -d '{"preferences":{"theme":"dark","language":"es"}}'
-   ```
-
-#### Automated Testing
-
-```bash
-# Run unit tests
-npm run test -- src/modules/settings
-
-# Run E2E tests (if configured)
-npm run test:e2e -- settings
+  @@map("user_preferences")
+}
 ```
 
-## Usage Examples
+### 3. Backend Implementation Example (Prisma)
 
-### In a React Component
+```typescript
+// backend/src/controllers/preferences.controller.ts
+import { PrismaClient } from '@prisma/client'
 
-```tsx
-import { usePreferences } from '@/modules/settings'
+const prisma = new PrismaClient()
 
-function MyComponent() {
-  const { preferences, updatePreferences, isLoading } = usePreferences(userId)
+export async function getPreferences(req, res) {
+  const { userId } = req.params
 
-  const handleThemeChange = async () => {
-    await updatePreferences({ theme: 'dark' })
+  try {
+    let preferences = await prisma.userPreferences.findUnique({
+      where: { userId }
+    })
+
+    // If no preferences exist, return defaults
+    if (!preferences) {
+      preferences = {
+        theme: 'system',
+        language: 'es',
+        timezone: 'UTC',
+        dateFormat: 'DD/MM/YYYY',
+        notificationsEmail: true,
+        notificationsPush: true,
+        notificationsMarketing: false,
+        notificationsSecurity: true
+      }
+    }
+
+    // Transform to API format
+    const apiPreferences = {
+      theme: preferences.theme,
+      language: preferences.language,
+      timezone: preferences.timezone,
+      dateFormat: preferences.dateFormat,
+      notifications: {
+        email: preferences.notificationsEmail,
+        push: preferences.notificationsPush,
+        marketing: preferences.notificationsMarketing,
+        security: preferences.notificationsSecurity
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { preferences: apiPreferences }
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { message: error.message }
+    })
   }
+}
 
-  return (
-    <div>
-      <p>Current theme: {preferences.theme}</p>
-      <button onClick={handleThemeChange}>Switch to Dark</button>
-    </div>
-  )
+export async function updatePreferences(req, res) {
+  const { userId } = req.params
+  const { preferences } = req.body
+
+  try {
+    // Transform from API format to database format
+    const dbData = {
+      userId,
+      theme: preferences.theme,
+      language: preferences.language,
+      timezone: preferences.timezone,
+      dateFormat: preferences.dateFormat,
+      notificationsEmail: preferences.notifications?.email,
+      notificationsPush: preferences.notifications?.push,
+      notificationsMarketing: preferences.notifications?.marketing,
+      notificationsSecurity: preferences.notifications?.security
+    }
+
+    const updated = await prisma.userPreferences.upsert({
+      where: { userId },
+      update: dbData,
+      create: dbData
+    })
+
+    // Transform back to API format
+    const apiPreferences = {
+      theme: updated.theme,
+      language: updated.language,
+      timezone: updated.timezone,
+      dateFormat: updated.dateFormat,
+      notifications: {
+        email: updated.notificationsEmail,
+        push: updated.notificationsPush,
+        marketing: updated.notificationsMarketing,
+        security: updated.notificationsSecurity
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { preferences: apiPreferences }
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { message: error.message }
+    })
+  }
 }
 ```
 
-### In an API Route
+## Files Created
 
-```ts
-import { GetPreferencesUseCase, SupabasePreferencesRepository } from '@/modules/settings'
-import { createClient } from '@/lib/supabase/server'
-
-export async function GET() {
-  const supabase = createClient()
-  const repo = new SupabasePreferencesRepository(supabase)
-  const useCase = new GetPreferencesUseCase(repo)
-
-  const result = await useCase.execute({ userId: 'user-id' })
-  return Response.json(result)
-}
-```
-
-## Integration Points
-
-### 1. User Menu
-
-The user menu already has a link to `/settings`:
-
-```tsx
-// src/components/ui/user-menu.tsx
-{
-  id: 'settings',
-  label: 'Settings',
-  icon: Settings,
-  path: '/settings'  // ✓ Already configured
-}
-```
-
-### 2. Redux Integration
-
-The existing `ui-slice.ts` can be synchronized with user preferences:
-
-```tsx
-import { usePreferences } from '@/modules/settings'
-import { setTheme } from '@/shared/state/slices/ui-slice'
-import { useAppDispatch } from '@/shared/state/hooks'
-
-function SettingsSync() {
-  const dispatch = useAppDispatch()
-  const { preferences } = usePreferences(userId)
-
-  useEffect(() => {
-    dispatch(setTheme(preferences.theme))
-  }, [preferences.theme])
-}
-```
-
-## Troubleshooting
-
-### Error: "GET /api/preferences 500"
-
-**Cause:** Database table doesn't exist or RLS policies are blocking access
-
-**Solution:**
-1. Verify migration was applied: `supabase db push`
-2. Check user is authenticated
-3. Verify RLS policies allow user access
-
-### Error: "Failed to fetch preferences"
-
-**Cause:** User not authenticated or session expired
-
-**Solution:**
-1. Check authentication status
-2. Refresh user session
-3. Verify Supabase client configuration
-
-### Preferences Not Saving
-
-**Cause:** Validation error or database constraints
-
-**Solution:**
-1. Check console for validation errors
-2. Verify preference values match allowed types
-3. Check database constraints in migration
-
-## Future Enhancements
-
-- [ ] Real-time synchronization across devices using Supabase Realtime
-- [ ] Preferences export/import functionality
-- [ ] Preferences history and versioning
-- [ ] Advanced notification scheduling
-- [ ] Two-factor authentication preferences
-- [ ] Privacy and data management settings
-
-## Files Modified/Created
-
-### New Files
-
-- `src/modules/settings/` (entire module)
+- `src/modules/settings/` (entire module with HTTP adapter)
 - `src/app/settings/page.tsx`
 - `src/app/settings/layout.tsx`
-- `src/app/api/preferences/route.ts`
+- `src/app/api/preferences/route.ts` (BFF layer)
 - `src/app/api/realtime/events/route.ts`
-- `supabase/migrations/20250115000000_create_user_preferences.sql`
 - `docs/settings-implementation.md`
 
-### Files Referenced (Not Modified)
+## Summary
 
-- `src/components/ui/user-menu.tsx` (already has /settings link)
-- `src/shared/state/slices/ui-slice.ts` (can be integrated)
-- `src/shared/types/api.types.ts` (UserPreferences type already defined)
-
-## Support
-
-For issues or questions:
-1. Check the module README: `src/modules/settings/README.md`
-2. Review this implementation guide
-3. Check console logs for detailed error messages
-4. Verify database migrations are applied
+- ✅ Clean Architecture with HTTP backend
+- ✅ Next.js API routes as BFF layer
+- ✅ Backend API with Prisma (to be implemented separately)
+- ✅ Type-safe preferences management
+- ✅ Fallback to LocalStorage
+- ✅ Responsive UI with Tailwind
+- ✅ Full documentation

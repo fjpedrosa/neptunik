@@ -20,7 +20,7 @@ export { UpdatePreferencesUseCase } from './application/use-cases/update-prefere
 export type { UpdatePreferencesInput, UpdatePreferencesOutput } from './application/use-cases/update-preferences'
 
 // Infrastructure adapters
-export { SupabasePreferencesRepository } from './infra/adapters/supabase-preferences-repository'
+export { HttpPreferencesRepository, createHttpPreferencesRepository } from './infra/adapters/http-preferences-repository'
 export { LocalStoragePreferencesRepository } from './infra/adapters/local-storage-preferences-repository'
 
 // UI hooks

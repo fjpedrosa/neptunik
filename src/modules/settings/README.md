@@ -8,15 +8,16 @@ The Settings module follows Clean Architecture principles with clear separation 
 
 - **Domain**: Core business entities and repository interfaces
 - **Application**: Use cases and business logic
-- **Infrastructure**: External adapters (Supabase, LocalStorage)
+- **Infrastructure**: External adapters (HTTP Backend API, LocalStorage)
 - **UI**: React components and hooks
 
 ## Features
 
 - User preferences management (theme, language, timezone, notifications)
-- Multiple storage adapters (Supabase, LocalStorage)
+- Multiple storage adapters (HTTP Backend API with Prisma, LocalStorage fallback)
 - Type-safe preferences validation
 - React hooks for easy integration
+- Backend agnostic design (can point to any API endpoint)
 
 ## Usage
 
@@ -46,15 +47,14 @@ function SettingsPage() {
 ### In an API Route
 
 ```ts
-import { GetPreferencesUseCase, SupabasePreferencesRepository } from '@/modules/settings'
-import { createClient } from '@/lib/supabase/server'
+import { createHttpPreferencesRepository } from '@/modules/settings'
 
 export async function GET(request: Request) {
-  const supabase = createClient()
-  const repository = new SupabasePreferencesRepository(supabase)
-  const useCase = new GetPreferencesUseCase(repository)
+  const repository = createHttpPreferencesRepository({
+    baseUrl: process.env.BACKEND_API_URL
+  })
 
-  const { preferences } = await useCase.execute({ userId: 'user-id' })
+  const preferences = await repository.getPreferences('user-id')
 
   return Response.json({ preferences })
 }
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
 ### Infrastructure Layer
 
 **Adapters:**
-- `SupabasePreferencesRepository`: PostgreSQL persistence via Supabase
+- `HttpPreferencesRepository`: Calls backend API with Prisma for persistence
 - `LocalStoragePreferencesRepository`: Browser storage fallback
 
 ### UI Layer
@@ -127,17 +127,38 @@ npm run test:component
 
 ## Dependencies
 
-- `@supabase/supabase-js`: Database client
 - React 18+
 - TypeScript 5+
+- Backend API with Prisma (separate service)
 
-## Migration
+## Backend API Requirements
 
-If migrating from legacy preferences storage:
+The backend API should implement these endpoints:
 
-1. Run the Supabase migration to create the `user_preferences` table
-2. Use the `LocalStoragePreferencesRepository` as a fallback during migration
-3. Gradually migrate users to Supabase storage
+- `GET /users/:userId/preferences` - Retrieve user preferences
+- `PUT /users/:userId/preferences` - Update user preferences
+- `DELETE /users/:userId/preferences` - Reset to defaults
+
+Expected response format:
+```json
+{
+  "success": true,
+  "data": {
+    "preferences": {
+      "theme": "dark",
+      "language": "es",
+      "timezone": "UTC",
+      "dateFormat": "DD/MM/YYYY",
+      "notifications": {
+        "email": true,
+        "push": true,
+        "marketing": false,
+        "security": true
+      }
+    }
+  }
+}
+```
 
 ## Future Enhancements
 
